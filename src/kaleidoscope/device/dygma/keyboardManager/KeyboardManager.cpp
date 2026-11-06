@@ -24,6 +24,7 @@
 
 //#include "kaleidoscope/driver/color/GammaCorrection.h"
 #include "kaleidoscope/driver/keyscanner/Base_Impl.h"
+#include "kaleidoscope/keyswitch_state.h"
 //#include "kaleidoscope/util/crc16.h"
 
 //#include "common.h"
@@ -195,6 +196,11 @@ dygma_keyboards::key_data KeyboardKeyScanner::previousLeftHandState;
 dygma_keyboards::key_data KeyboardKeyScanner::previousRightHandState;
 dygma_keyboards::key_data KeyboardKeyScanner::leftHandMask;
 dygma_keyboards::key_data KeyboardKeyScanner::rightHandMask;
+uint8_t KeyboardKeyScanner::logicalState_[8];
+uint8_t KeyboardKeyScanner::previousLogicalState_[8];
+const KeyboardKeyScanner::Router *KeyboardKeyScanner::router_ = nullptr;
+
+static_assert(KeyboardKeyScannerProps::KeyAddr::upper_limit <= 64, "The logical state holds 64 keys");
 
 void KeyboardKeyScanner::scanMatrix()
 {
@@ -218,8 +224,93 @@ void KeyboardKeyScanner::readMatrix()
     }
 }
 
+void KeyboardKeyScanner::setRouter(const Router *router)
+{
+    router_ = router;
+}
+
+void KeyboardKeyScanner::deliver(KeyAddr key_addr, uint8_t key_state, Key key)
+{
+    if (key_addr.isValid())
+    {
+        uint8_t offset = key_addr.toInt();
+
+        if (keyIsPressed(key_state))
+        {
+            logicalState_[offset >> 3] |= (1 << (offset & 7));
+        }
+        else if (keyToggledOff(key_state))
+        {
+            logicalState_[offset >> 3] &= ~(1 << (offset & 7));
+        }
+    }
+
+    ThisType::handleKeyswitchEvent(key, key_addr, key_state);
+}
+
+bool KeyboardKeyScanner::logicalBit(const uint8_t *bits, KeyAddr key_addr)
+{
+    if (!key_addr.isValid())
+    {
+        return false;
+    }
+
+    uint8_t offset = key_addr.toInt();
+
+    return (bits[offset >> 3] >> (offset & 7)) & 1;
+}
+
+/* Clear the logical bit of every release in this scan before any event goes out, so readers see the scan's releases at once as
+ * they see the physical matrix */
+void KeyboardKeyScanner::releasePrePass()
+{
+    for (uint8_t row = 0; row < Props_::matrix_rows; row++)
+    {
+        uint16_t released_left = previousLeftHandState.rows[row] & ~leftHandState.rows[row];
+        uint16_t released_right = previousRightHandState.rows[row] & ~rightHandState.rows[row];
+
+        if ((released_left | released_right) == 0)
+        {
+            continue;
+        }
+
+        for (uint8_t col = 0; col < Props_::matrix_columns; col++)
+        {
+            KeyAddr target;
+
+            if ((released_left >> col) & 1)
+            {
+                target = router_->releaseTarget(KeyAddr(row, col));
+
+                if (target.isValid())
+                {
+                    logicalState_[target.toInt() >> 3] &= ~(1 << (target.toInt() & 7));
+                }
+            }
+
+            if ((released_right >> col) & 1)
+            {
+                target = router_->releaseTarget(KeyAddr(row, (Props_::matrix_columns - 1) - col));
+
+                if (target.isValid())
+                {
+                    logicalState_[target.toInt() >> 3] &= ~(1 << (target.toInt() & 7));
+                }
+            }
+        }
+    }
+}
+
 void KeyboardKeyScanner::actOnMatrixScan()
 {
+    memcpy(previousLogicalState_, logicalState_, sizeof(logicalState_));
+
+    if (router_ != nullptr)
+    {
+        releasePrePass();
+        router_->scanBegin();
+    }
+
     for (uint8_t row = 0; row < Props_::matrix_rows; row++)
     {
         for (uint8_t col = 0; col < HAND_COLUMN_BITMAP_BIT_SIZE; col++)
@@ -246,7 +337,14 @@ void KeyboardKeyScanner::actOnMatrixScan()
                 NRF_LOG_FLUSH();
 #endif
 
-                ThisType::handleKeyswitchEvent(Key_NoKey, KeyAddr(row, col), keyState);
+                if (router_ != nullptr)
+                {
+                    router_->route(KeyAddr(row, col), keyState);
+                }
+                else
+                {
+                    deliver(KeyAddr(row, col), keyState);
+                }
             }
 
             // right
@@ -267,7 +365,14 @@ void KeyboardKeyScanner::actOnMatrixScan()
                 NRF_LOG_FLUSH();
 #endif
 
-                ThisType::handleKeyswitchEvent(Key_NoKey, KeyAddr(row, (Props_::matrix_columns - 1) - col), keyState);
+                if (router_ != nullptr)
+                {
+                    router_->route(KeyAddr(row, (Props_::matrix_columns - 1) - col), keyState);
+                }
+                else
+                {
+                    deliver(KeyAddr(row, (Props_::matrix_columns - 1) - col), keyState);
+                }
             }
         }
     }
@@ -332,6 +437,11 @@ void KeyboardKeyScanner::maskHeldKeys()
 
 bool KeyboardKeyScanner::isKeyswitchPressed(KeyAddr key_addr)
 {
+    if (router_ != nullptr && router_->active())
+    {
+        return logicalBit(logicalState_, key_addr);
+    }
+
     auto row = key_addr.row();
     auto col = key_addr.col();
 
@@ -347,6 +457,11 @@ bool KeyboardKeyScanner::isKeyswitchPressed(KeyAddr key_addr)
 
 bool KeyboardKeyScanner::wasKeyswitchPressed(KeyAddr key_addr)
 {
+    if (router_ != nullptr && router_->active())
+    {
+        return logicalBit(previousLogicalState_, key_addr);
+    }
+
     auto row = key_addr.row();
     auto col = key_addr.col();
 
@@ -388,6 +503,8 @@ void KeyboardKeyScanner::reset(void)
 {
     dygma_keyboards::Hand::keyDataReleaseAll( &leftHandState );
     dygma_keyboards::Hand::keyDataReleaseAll( &rightHandState );
+    memset(logicalState_, 0, sizeof(logicalState_));
+    memset(previousLogicalState_, 0, sizeof(previousLogicalState_));
     Runtime.hid().keyboard().releaseAllKeys();
     Runtime.hid().keyboard().sendReport();
 }

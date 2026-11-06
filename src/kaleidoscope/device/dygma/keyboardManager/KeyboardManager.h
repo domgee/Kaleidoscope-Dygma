@@ -92,6 +92,19 @@ class KeyboardKeyScanner : public kaleidoscope::driver::keyscanner::Base<Keyboar
     static uint8_t previousPressedKeyswitchCount();
     static void reset(void);
 
+    /* An optional router between the matrix and the event handler */
+    struct Router {
+        void (*scanBegin)();                              /* once per scan, before any event */
+        void (*route)(KeyAddr phys, uint8_t key_state);   /* every physical event */
+        KeyAddr (*releaseTarget)(KeyAddr phys);           /* logical address a release of phys goes to, invalid when none */
+        bool (*active)();                                 /* false when the logical state equals the physical state */
+    };
+
+    static void setRouter(const Router *router);
+
+    /* Deliver an event at a logical address and record it in the logical pressed state */
+    static void deliver(KeyAddr key_addr, uint8_t key_state, Key key = Key_NoKey);
+
    protected:
     static dygma_keyboards::key_data leftHandState;
     static dygma_keyboards::key_data rightHandState;
@@ -100,6 +113,14 @@ class KeyboardKeyScanner : public kaleidoscope::driver::keyscanner::Base<Keyboar
 
     static dygma_keyboards::key_data leftHandMask;
     static dygma_keyboards::key_data rightHandMask;
+
+    /* Pressed state by logical address, bit n = KeyAddr n */
+    static uint8_t logicalState_[8];
+    static uint8_t previousLogicalState_[8];
+    static const Router *router_;
+
+    static bool logicalBit(const uint8_t *bits, KeyAddr key_addr);
+    static void releasePrePass();
     static void usbConnectionsStateMachine();
 };
 
