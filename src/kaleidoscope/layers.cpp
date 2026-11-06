@@ -198,15 +198,19 @@ void Layer_::deactivate(uint8_t layer) {
   bitClear(layer_state_, layer);
 
   // Rearrange the activation order array...
-  uint8_t idx = 0;
-  for (uint8_t i = active_layer_count_; i > 0; i--) {
+  int8_t idx = -1;
+  for (int8_t i = active_layer_count_ - 1; i >= 0; i--) {
     if (active_layers_[i] == layer) {
       idx = i;
       break;
     }
   }
-  memmove(&active_layers_[idx], &active_layers_[idx + 1], active_layer_count_ - idx);
-  active_layer_count_--;
+
+  /* Remove the layer only from the slot that holds it. Search from the top slot down to slot 0 and never above the top */
+  if (idx >= 0) {
+    memmove(&active_layers_[idx], &active_layers_[idx + 1], active_layer_count_ - idx - 1);
+    active_layer_count_--;
+  }
 
   // Update the keymap cache (but not live_composite_keymap_; that gets
   // updated separately, when keys toggle on or off. See layers.h)
