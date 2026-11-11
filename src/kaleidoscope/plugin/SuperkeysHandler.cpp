@@ -220,8 +220,8 @@ void SuperkeysHandler::save_pressed_modifiers(Key &mapped_key, uint8_t keyState)
 
 }
 
-/* Return false for a dual-function Superkey that this address did not arm. Its code reaches the handler from such an address only through the
- * live keymap cache, for a combo member's release and its Qukeys restore presses, and must leave the slot alone */
+/* Return false for a dual-function Superkey that this address did not arm. Its code reaches the handler from such an address only through the live
+ * keymap cache, for a combo member's late release and for Qukeys restore presses after a re-press, and must leave the slot alone */
 static bool dual_function_owner(const Superkey &sk, KeyAddr key_addr)
 {
     if (!keyRoleManager.is_dual_function_slot(sk.get_index()))
