@@ -220,8 +220,8 @@ void SuperkeysHandler::save_pressed_modifiers(Key &mapped_key, uint8_t keyState)
 
 }
 
-/* Return false for a dual-function Superkey that this address did not arm. Qukeys plays such a cell, so its releases and holds reach the
- * handler only through the live keymap cache, from combo member releases and Qukeys restore presses, and must leave the slot alone */
+/* Return false for a dual-function Superkey that this address did not arm. Its code reaches the handler from such an address only through the
+ * live keymap cache, for a combo member's release and its Qukeys restore presses, and must leave the slot alone */
 static bool dual_function_owner(const Superkey &sk, KeyAddr key_addr)
 {
     if (!keyRoleManager.is_dual_function_slot(sk.get_index()))
@@ -427,11 +427,18 @@ EventHandlerResult SuperkeysHandler::beforeReportingState()
 
 EventHandlerResult SuperkeysHandler::onFocusEvent(const char *command)
 {
-    if (::Focus.handleHelp(command, "superkeys.map\nsuperkeys.waitfor\nsuperkeys.timeout\nsuperkeys.repeat\nsuperkeys.holdstart\nsuperkeys.overlap"))
+    if (::Focus.handleHelp(command, "superkeys.map\nsuperkeys.waitfor\nsuperkeys.timeout\nsuperkeys.repeat\nsuperkeys.holdstart\nsuperkeys.overlap\n"
+                                    "superkeys.unique"))
         return EventHandlerResult::OK;
 
     if (strncmp_P(command, "superkeys.", 10) != 0) return EventHandlerResult::OK;
 
+    /* Tell Bazecor that keymap cells keep their Superkey codes and dual-function Superkeys play with their full actions */
+    if (strcmp_P(command + 10, "unique") == 0)
+    {
+        ::Focus.send((uint8_t)1);
+        return EventHandlerResult::EVENT_CONSUMED;
+    }
 
     if (strcmp_P(command + 10, "waitfor") == 0)
     {

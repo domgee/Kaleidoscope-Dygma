@@ -45,8 +45,8 @@ KeyRoleManager::KeyRoleManager()
 
 /* HELPER FUNCTIONS */
 
-/* The boot migration in migrate_legacy_keymap is the only user of layerIndexFromRaw, hidModToDumIndex, is_only_modifier, has_layer_change,
- * calculate_qukey_code and replace_superkey_with_qukey. Keep them unchanged so the migration reproduces the codes older firmware stored */
+/* Keep layerIndexFromRaw, hidModToDumIndex, is_only_modifier, has_layer_change, calculate_qukey_code and replace_superkey_with_qukey
+ * unchanged. The boot migration uses them to reproduce the codes older firmware stored */
 
 auto is_idle = [](const Key &k) { return k.getRaw() == 1; };
 
