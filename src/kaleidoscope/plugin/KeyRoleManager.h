@@ -42,14 +42,18 @@ class KeyRoleManager : public kaleidoscope::Plugin
 
   public:
 
-    struct modified_keys_t
+    /* Record the keymap storage format, appended last to the config cache. Treat any value other than KEYMAP_FORMAT_SUPERKEYS as a keymap
+     * that may still hold the DUM and DUL codes older firmware converted tap+hold Superkeys into */
+    typedef struct PACK
     {
-        uint16_t sk_id;
-        uint16_t qukey_id;
-        uint8_t flags_action_1;
-        uint8_t flags_action_2;
-    };
-    
+        uint8_t keymap_format;
+        uint8_t reserved[3];
+    } keymap_format_config_t;
+
+    static_assert(sizeof(keymap_format_config_t) == 4, "keymap_format_config_t must stay 4 bytes");
+
+    static constexpr uint8_t KEYMAP_FORMAT_SUPERKEYS = 1;
+
     KeyRoleManager();
 
     /**
@@ -122,52 +126,26 @@ class KeyRoleManager : public kaleidoscope::Plugin
      */
     void setup_superkeys(void);
 
-    Key search_and_replace(Key key);
-
     bool is_qukey(Key key);
-
-    void get_superkey(Key* key);
 
     void setup_keys();
 
-    /**
-    * @brief Transforms the keymap bidirectionally between superkeys and qukeys
-    * 
-    * This function performs a two-pass transformation on the entire keymap stored in EEPROM:
-    * 
-    * Pass 1: Reverts all qukeys back to their original superkeys using the previous mapping.
-    *         This is necessary because when superkey configurations change, the qukey codes
-    *         they generate also change. We use previous_modified_keys[] which was saved
-    *         before the configuration update to correctly identify and revert qukeys.
-    * 
-    * Pass 2: Transforms superkeys to qukeys based on the current configuration.
-    *         Simple superkeys (tap + hold with modifier/layer) are converted to qukeys
-    *         for performance optimization, while complex superkeys remain unchanged.
-    * 
-    * This approach ensures the keymap stays synchronized with superkey configuration changes,
-    * handling both superkey→qukey and qukey→superkey transformations correctly.
-    * 
-    * @note This function is called after superkey configuration updates via Focus protocol
-    * @note Changes are committed to EEPROM storage at the end
-    */
-    void transform_keymap_superkeys_to_qukeys();
+    /* Return true when the configured Superkey slot is dual-function, so Qukeys plays it with its full tap and hold actions */
+    bool is_dual_function_slot(uint16_t slot) const;
 
-    modified_keys_t* get_configured_qukeys(uint16_t qukey_id);
+    /* Return true with the tap and hold actions, flags included, when key is a dual-function Superkey. Leave tap and hold untouched otherwise */
+    bool dual_function_superkey(Key key, Key &tap, Key &hold) const;
+
+    bool is_dual_function_superkey(Key key) const;
 
   private:
 
     const keyrole_config_t * p_keyrole_config = nullptr;
+    const keymap_format_config_t * p_keymap_format_config = nullptr;
 
-    // Current qukey mappings (superkey_id -> qukey_id)
-    modified_keys_t modified_keys[Utils::MAX_SUPER_KEYS_ACTIVE];
-    
-    // Previous qukey mappings saved before configuration update
-    // Used to correctly revert qukeys to superkeys when configurations change
-    modified_keys_t previous_modified_keys[Utils::MAX_SUPER_KEYS_ACTIVE];
+    /* Keep one bit per configured Superkey slot that plays as a dual-function key */
+    uint8_t df_slots_[(Utils::MAX_SUPER_KEYS_ACTIVE + 7) / 8];
 
-    uint8_t modified_keys_count;           // Number of active qukey mappings
-    uint8_t previous_modified_keys_count;  // Number of previous qukey mappings
-    
     uint8_t sk_index;
     uint8_t configured_superkeys;
 
@@ -178,13 +156,17 @@ class KeyRoleManager : public kaleidoscope::Plugin
         SUPERKEY
     };
 
-    void determine_key_role();
+    void rebuild_dual_function_slots();
+
+    static bool dual_function_rule(const Superkey::superkey_config_t *p_superkey_config);
+
+    uint16_t legacy_qukey_code(uint8_t slot);
+
+    void migrate_legacy_keymap();
 
 //    void config();
 
     void send_sk_map();
-
-    Key find_superkey_for_qukey(Key qukey);
 
     bool is_only_modifier(Key key);
 

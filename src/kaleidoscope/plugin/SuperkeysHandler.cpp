@@ -26,6 +26,7 @@
 #include "kaleidoscope/plugin/SuperkeysHandler.h"
 #include "SuperkeysHandler.h"
 #include "kaleidoscope/plugin/Qukeys.h"
+#include "kaleidoscope/plugin/KeyRoleManager.h"
 
 #define DEFAULT_WAIT_FOR_MS             500
 #define DEFAULT_TRIGGER_TIMEOUT_MS      144
@@ -219,6 +220,18 @@ void SuperkeysHandler::save_pressed_modifiers(Key &mapped_key, uint8_t keyState)
 
 }
 
+/* Return false for a dual-function Superkey that this address did not arm. Qukeys plays such a cell, so its releases and holds reach the
+ * handler only through the live keymap cache, from combo member releases and Qukeys restore presses, and must leave the slot alone */
+static bool dual_function_owner(const Superkey &sk, KeyAddr key_addr)
+{
+    if (!keyRoleManager.is_dual_function_slot(sk.get_index()))
+    {
+        return true;
+    }
+
+    return sk.is_enable() && sk.get_keyAddr() == key_addr;
+}
+
 EventHandlerResult SuperkeysHandler::handle_superkeys(Key &mapped_key, KeyAddr key_addr, uint8_t keyState)
 {
     // Superkey processing starts here.
@@ -301,6 +314,11 @@ EventHandlerResult SuperkeysHandler::handle_superkeys(Key &mapped_key, KeyAddr k
         {
             if (SuperkeysHandler_sk_array[pos].get_index() == super_key_index)
             {
+                if (!dual_function_owner(SuperkeysHandler_sk_array[pos], key_addr))
+                {
+                    return EventHandlerResult::EVENT_CONSUMED;
+                }
+
                 SuperkeysHandler_sk_array[pos].key_released();
                 return EventHandlerResult::EVENT_CONSUMED;
             }
@@ -312,6 +330,11 @@ EventHandlerResult SuperkeysHandler::handle_superkeys(Key &mapped_key, KeyAddr k
         {
             if (SuperkeysHandler_sk_array[pos].get_index() == super_key_index)
             {
+                if (!dual_function_owner(SuperkeysHandler_sk_array[pos], key_addr))
+                {
+                    return EventHandlerResult::EVENT_CONSUMED;
+                }
+
                 SuperkeysHandler_sk_array[pos].key_is_pressed();
                 return EventHandlerResult::EVENT_CONSUMED;
             }

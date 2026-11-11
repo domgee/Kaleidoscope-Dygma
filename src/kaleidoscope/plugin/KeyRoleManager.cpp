@@ -22,6 +22,7 @@
 #include "kaleidoscope/key_defs.h"
 #include <Kaleidoscope-FocusSerial.h>
 #include <cstdint>
+#include <cstring>
 
 #include "EEPROMKeymapDygma.h"
 #include "QukeysDygma.h"
@@ -38,18 +39,14 @@ namespace plugin
 KeyRoleManager::KeyRoleManager()
 {
     sk_index = 0;
-    this->modified_keys_count = 0;
-    // Initialize the modified_keys array
-    for (auto & modified_key : modified_keys)
-    {
-        modified_key.qukey_id = 0;
-        modified_key.sk_id = 0;
-        modified_key.flags_action_1 = 0;
-        modified_key.flags_action_2 = 0;
-    }
+    configured_superkeys = 0;
+    memset(df_slots_, 0, sizeof(df_slots_));
 }
 
 /* HELPER FUNCTIONS */
+
+/* The boot migration in migrate_legacy_keymap is the only user of layerIndexFromRaw, hidModToDumIndex, is_only_modifier, has_layer_change,
+ * calculate_qukey_code and replace_superkey_with_qukey. Keep them unchanged so the migration reproduces the codes older firmware stored */
 
 auto is_idle = [](const Key &k) { return k.getRaw() == 1; };
 
@@ -149,30 +146,6 @@ bool KeyRoleManager::is_qukey(Key key)
 }
 /* END HELPER FUNCTIONS */
 
-KeyRoleManager::modified_keys_t* KeyRoleManager::get_configured_qukeys(uint16_t qukey_id)
-{
-    for (modified_keys_t& key : this->modified_keys) 
-    {
-        if (key.qukey_id == qukey_id)
-        {
-            return &key;
-        }    
-    }
-    return nullptr;
-}
-
-void KeyRoleManager::get_superkey(Key* mapped_key)
-{
-    for (modified_keys_t key : this->modified_keys) 
-    {
-        if (key.qukey_id == mapped_key->getRaw())
-        {
-            *mapped_key = Key(key.sk_id);
-            return;
-        }    
-    }
-}
-
 uint16_t KeyRoleManager::calculate_qukey_code(uint32_t hold_action_raw, uint16_t tap_action_raw)
 {
     // Extract HID keycode (lower 8 bits) and flags (upper 8 bits)
@@ -244,70 +217,6 @@ uint16_t KeyRoleManager::calculate_qukey_code(uint32_t hold_action_raw, uint16_t
     return 0;
 }
 
-Key KeyRoleManager::search_and_replace(Key key)
-{
-    // Case 1: It's a superkey - check if it should be transformed to qukey
-    if (!IS_OUTSIDE_DYNAMIC_SUPER_RANGE(key))
-    {
-        uint8_t super_key_index = static_cast<uint8_t>(key.getRaw() - ranges::DYNAMIC_SUPER_FIRST);
-        const Superkey::superkey_config_t * p_superkey_config = &p_keyrole_config->superkeys[super_key_index];
-
-        Key action_0 = Superkey::getActionAsKey( p_superkey_config, 0);
-        Key action_1 = Superkey::getActionAsKey( p_superkey_config, 1);
-        Key action_2 = Superkey::getActionAsKey( p_superkey_config, 2);
-        Key action_3 = Superkey::getActionAsKey( p_superkey_config, 3);
-        Key action_4 = Superkey::getActionAsKey( p_superkey_config, 4);
-
-        if (!is_idle(action_0) && !is_idle(action_1) && is_idle(action_2) && is_idle(action_3) && is_idle(action_4))
-        {
-            // This is a fast Superkey, check if it should be a Qukey
-            
-            // Check if tap action is a Layer Lock BEFORE cleaning flags - these cannot be converted to qukeys
-            bool tap_is_layer_lock = (action_0.getRaw() >= Utils::LAYER_LOCK_FIRST && 
-                                      action_0.getRaw() <= Utils::LAYER_LOCK_LAST);
-            
-            Key tap_action = action_0;
-            tap_action.setFlags(0);
-            
-            // Only convert to Qukey if:
-            // 1. Tap action is not a layer lock
-            // 2. Tap action is not just a modifier
-            // 3. Hold action is a modifier or layer change
-            if (!tap_is_layer_lock && 
-                !is_only_modifier(tap_action) && 
-                (is_only_modifier(action_1) || has_layer_change(action_1)))
-            {
-                // Transform to QUKEY (flags will be stored in modified_keys[] and restored when needed)
-                uint16_t qukey_code = replace_superkey_with_qukey(&action_0, &action_1);
-                //NRF_LOG_DEBUG("[SK->QK] SK:0x%04X tap:0x%04X(flags:0x%02X) -> QK:0x%04X", 
-                //              key.getRaw(), action_0.getRaw(), action_0.getFlags(), qukey_code);
-                return Key(qukey_code);
-            }
-        }
-        
-        // Keep as SUPERKEY
-        return key;
-    }
-    
-    // Case 2: It's a qukey - check if it should be reverted to superkey
-    else if (is_qukey(key))
-    {
-        Key superkey_equivalent = find_superkey_for_qukey(key);
-        
-        if (superkey_equivalent.getRaw() != key.getRaw())
-        {
-            //NRF_LOG_INFO("QK->SK: 0x%04X -> 0x%04X", key.getRaw(), superkey_equivalent.getRaw());
-            return superkey_equivalent;
-        }
-        
-        // Keep as QUKEY
-        return key;
-    }
-    
-    // Case 3: Neither superkey nor qukey - return unchanged
-    return key;
-}
-
 uint16_t KeyRoleManager::replace_superkey_with_qukey(const Key *action_0, const Key *action_1)
 {
     if (!action_0 || !action_1) return 0;
@@ -327,7 +236,7 @@ uint16_t KeyRoleManager::replace_superkey_with_qukey(const Key *action_0, const 
 void KeyRoleManager::setup_keys()
 {
     set_active_sk();
-    determine_key_role();
+    rebuild_dual_function_slots();
     SuperkeysHandler::save_superkey_map_from( p_keyrole_config->superkeys, this->configured_superkeys);
 }
 
@@ -338,8 +247,17 @@ EventHandlerResult KeyRoleManager::onSetup()
     result = kbdfal_ll_memory_item_request( KBDMEM_ITEM_TYPE_KEYROLE, (const void **)&p_keyrole_config );
     ASSERT_DYGMA( result == RESULT_OK, "kbdfal_ll_memory_item_request failed" );
 
+    result = kbdfal_ll_memory_item_request( KBDMEM_ITEM_TYPE_KEYMAP_FORMAT, (const void **)&p_keymap_format_config );
+    ASSERT_DYGMA( result == RESULT_OK, "kbdfal_ll_memory_item_request failed" );
+
     set_active_sk();
-    determine_key_role();
+
+    if (p_keymap_format_config->keymap_format != KEYMAP_FORMAT_SUPERKEYS)
+    {
+        migrate_legacy_keymap();
+    }
+
+    rebuild_dual_function_slots();
     return EventHandlerResult::OK;
 
     UNUSED( result );
@@ -383,64 +301,179 @@ void KeyRoleManager::set_active_sk()
     }
 }
 
-void KeyRoleManager::determine_key_role()
+/* Return the DUM or DUL code older firmware registered for the slot under its conditions, or 0 for none */
+uint16_t KeyRoleManager::legacy_qukey_code(uint8_t slot)
 {
-    // Reset the count to rebuild the mapping
-    this->modified_keys_count = 0;
-    
-    for (size_t i = 0; i < this->configured_superkeys; i++)
+    const Superkey::superkey_config_t * p_superkey_config = &p_keyrole_config->superkeys[slot];
+
+    Key action_0 = Superkey::getActionAsKey(p_superkey_config, 0);
+    Key action_1 = Superkey::getActionAsKey(p_superkey_config, 1);
+    Key action_2 = Superkey::getActionAsKey(p_superkey_config, 2);
+    Key action_3 = Superkey::getActionAsKey(p_superkey_config, 3);
+    Key action_4 = Superkey::getActionAsKey(p_superkey_config, 4);
+
+    if (is_idle(action_0) || is_idle(action_1) || !is_idle(action_2) || !is_idle(action_3) || !is_idle(action_4))
     {
-        const Superkey::superkey_config_t * p_superkey_config = &p_keyrole_config->superkeys[i];
+        return 0;
+    }
 
-        Key action_0 = Superkey::getActionAsKey(p_superkey_config, 0);
-        Key action_1 = Superkey::getActionAsKey(p_superkey_config, 1);
-        Key action_2 = Superkey::getActionAsKey(p_superkey_config, 2);
-        Key action_3 = Superkey::getActionAsKey(p_superkey_config, 3);
-        Key action_4 = Superkey::getActionAsKey(p_superkey_config, 4);
+    bool tap_is_layer_lock = (action_0.getRaw() >= Utils::LAYER_LOCK_FIRST && action_0.getRaw() <= Utils::LAYER_LOCK_LAST);
 
-        if (!is_idle(action_0) && !is_idle(action_1) && is_idle(action_2) && is_idle(action_3) && is_idle(action_4))
+    Key hold_action = action_1;
+    hold_action.setFlags(0);
+
+    if (tap_is_layer_lock || !(is_only_modifier(hold_action) || has_layer_change(action_1)))
+    {
+        return 0;
+    }
+
+    return replace_superkey_with_qukey(&action_0, &action_1);
+}
+
+/* Turn the DUM and DUL cells older firmware stored for tap+hold Superkeys back into the Superkey codes, once. Map a cell to the lowest slot
+ * with its code, as older firmware read it back and played it. Leave unmatched cells and codes outside the DU range as stored */
+void KeyRoleManager::migrate_legacy_keymap()
+{
+    uint16_t codes[Utils::MAX_SUPER_KEYS_ACTIVE];
+    bool any_code = false;
+
+    for (uint8_t i = 0; i < configured_superkeys; ++i)
+    {
+        codes[i] = legacy_qukey_code(i);
+
+        if (is_qukey(Key(codes[i])))
         {
-            // This is a fast Superkey, we need to check if it should be a Qukey or a Superkey,
-            // The decision will depend if the action 1 is only a modifier.
-            
-            // Check if tap action is a Layer Lock BEFORE cleaning flags - these cannot be converted to qukeys
-            bool tap_is_layer_lock = (action_0.getRaw() >= Utils::LAYER_LOCK_FIRST && 
-                                      action_0.getRaw() <= Utils::LAYER_LOCK_LAST);
+            any_code = true;
+        }
+    }
 
-            Key tap_action = action_0;
-            Key hold_action = action_1;
-            // Clean the flags of these keys to correctly calculate the qukey value.
-            // SHIFT + F = 49434 or 0xC04E
-            tap_action.setFlags(0);
-            hold_action.setFlags(0);
+    if (any_code)
+    {
+        const EEPROMKeymap::keymap_config_t * p_keymap_config = EEPROMKeymap::getKeymapConfig();
+        uint16_t total_keys = static_cast<uint16_t>(Runtime.device().numKeys()) * APP_LAYERS_CNT;
 
-            if (!tap_is_layer_lock && (is_only_modifier(hold_action) || has_layer_change(action_1)))
+        for (uint16_t pos = 0; pos < total_keys; ++pos)
+        {
+            Key stored_key = Key(p_keymap_config->keys[pos].keyCode, p_keymap_config->keys[pos].flags);
+
+            if (!is_qukey(stored_key))
             {
-                // QUKEY - flags will be stored in modified_keys[] and restored when needed
-                uint16_t qukey_code = replace_superkey_with_qukey(&action_0, &action_1);
-                if(qukey_code != 0 || (qukey_code < ranges::DUL_FIRST || qukey_code > ranges::DUL_LAST))
-                {
-                    // QUKEY DETECTED
-                    // Here we save the qukey and superkey id for later use.
-                    // IMPORTANT: We store the original flags so they can be restored when the qukey is used
-                    this->modified_keys[this->modified_keys_count].sk_id = ranges::DYNAMIC_SUPER_FIRST + i;
-                    this->modified_keys[this->modified_keys_count].qukey_id = qukey_code;
-                    this->modified_keys[this->modified_keys_count].flags_action_1 = action_0.getFlags();
-                    this->modified_keys[this->modified_keys_count].flags_action_2 = action_1.getFlags();
-
-                    //NRF_LOG_DEBUG("[DETERMINE] SK[%d]:0x%04X -> QK:0x%04X flags_a1:0x%02X stored at idx:%d", 
-                    //              i, ranges::DYNAMIC_SUPER_FIRST + i, qukey_code, action_0.getFlags(), this->modified_keys_count);
-                    this->modified_keys_count++;
-                }
+                continue;
             }
-            else if (tap_is_layer_lock)
+
+            for (uint8_t i = 0; i < configured_superkeys; ++i)
             {
-                //NRF_LOG_DEBUG("SK %d remains as SUPERKEY (tap: layer lock 0x%04X)", i, tap_action.getRaw());
+                if (codes[i] == stored_key.getRaw())
+                {
+                    EEPROMKeymap::updateKey(pos, Key(ranges::DYNAMIC_SUPER_FIRST + i));
+                    break;
+                }
             }
         }
     }
-    
-    ////NRF_LOG_DEBUG("determine_key_role: found %d qukeys", this->modified_keys_count);
+
+    /* Join the deferred save the keymap updates requested, so a power loss before it reruns the migration on unchanged data */
+    keymap_format_config_t keymap_format_config;
+    keymap_format_config.keymap_format = KEYMAP_FORMAT_SUPERKEYS;
+    memset(keymap_format_config.reserved, 0xFF, sizeof(keymap_format_config.reserved));
+
+    result_t result = kbdfal_ll_memory_data_save(p_keymap_format_config, &keymap_format_config, sizeof(keymap_format_config));
+    ASSERT_DYGMA( result == RESULT_OK, "kbdfal_ll_memory_data_save failed" );
+
+    UNUSED( result );
+}
+
+/* Play a Superkey through Qukeys when it has a tap and a hold and nothing else, the tap is no Layer Lock and no modifier, and
+ * the hold is a modifier with any modifier flags or a Layer Shift 0 to 9 */
+bool KeyRoleManager::dual_function_rule(const Superkey::superkey_config_t * p_superkey_config)
+{
+    const uint16_t tap = Superkey::getActionRaw(&p_superkey_config->actions[0]);
+    const uint16_t hold = Superkey::getActionRaw(&p_superkey_config->actions[1]);
+
+    if (tap == 0x0000 || tap == 0x0001 || tap == 0xFFFF || hold == 0x0001 || hold == 0xFFFF)
+    {
+        return false;
+    }
+
+    for (uint8_t j = 2; j <= 4; ++j)
+    {
+        if (Superkey::getActionRaw(&p_superkey_config->actions[j]) != 0x0001)
+        {
+            return false;
+        }
+    }
+
+    const uint8_t tap_code = static_cast<uint8_t>(tap & 0xFF);
+
+    if ((tap >= Utils::LAYER_LOCK_FIRST && tap <= Utils::LAYER_LOCK_LAST) || (tap_code >= 0xE0 && tap_code <= 0xE7))
+    {
+        return false;
+    }
+
+    if (hold >= Utils::LAYER_SHIFT_FIRST && hold <= Utils::LAYER_SHIFT_LAST)
+    {
+        return true;
+    }
+
+    const uint8_t hold_flags = static_cast<uint8_t>(hold >> 8);
+    const uint8_t hold_code = static_cast<uint8_t>(hold & 0xFF);
+
+    return (hold_flags & (SYNTHETIC | RESERVED)) == 0 && hold_code >= 0xE0 && hold_code <= 0xE7;
+}
+
+void KeyRoleManager::rebuild_dual_function_slots()
+{
+    memset(df_slots_, 0, sizeof(df_slots_));
+
+    if (p_keyrole_config == nullptr)
+    {
+        return;
+    }
+
+    for (uint8_t i = 0; i < configured_superkeys; ++i)
+    {
+        if (dual_function_rule(&p_keyrole_config->superkeys[i]))
+        {
+            df_slots_[i >> 3] |= static_cast<uint8_t>(1u << (i & 7));
+        }
+    }
+}
+
+bool KeyRoleManager::is_dual_function_slot(uint16_t slot) const
+{
+    if (slot >= configured_superkeys || slot >= Utils::MAX_SUPER_KEYS_ACTIVE)
+    {
+        return false;
+    }
+
+    return (df_slots_[slot >> 3] & (1u << (slot & 7))) != 0;
+}
+
+bool KeyRoleManager::dual_function_superkey(Key key, Key &tap, Key &hold) const
+{
+    if (p_keyrole_config == nullptr || IS_OUTSIDE_DYNAMIC_SUPER_RANGE(key.getRaw()))
+    {
+        return false;
+    }
+
+    const uint16_t slot = static_cast<uint16_t>(key.getRaw() - ranges::DYNAMIC_SUPER_FIRST);
+
+    if (!is_dual_function_slot(slot))
+    {
+        return false;
+    }
+
+    tap = Superkey::getActionAsKey(&p_keyrole_config->superkeys[slot], 0);
+    hold = Superkey::getActionAsKey(&p_keyrole_config->superkeys[slot], 1);
+    return true;
+}
+
+bool KeyRoleManager::is_dual_function_superkey(Key key) const
+{
+    Key tap;
+    Key hold;
+
+    return dual_function_superkey(key, tap, hold);
 }
 
 void KeyRoleManager::send_sk_map()
@@ -456,120 +489,6 @@ void KeyRoleManager::send_sk_map()
             ::Focus.send(key);
         }
     }
-}
-
-/**
- * @brief Finds the superkey that would generate a given qukey (unused in current implementation)
- * 
- * This function is kept for potential future use but is not currently called.
- * The two-pass transformation approach in transform_keymap_superkeys_to_qukeys()
- * uses the previous_modified_keys[] mapping instead.
- * 
- * @param qukey The qukey to search for
- * @return Key The corresponding superkey if found, otherwise the original qukey
- */
-Key KeyRoleManager::find_superkey_for_qukey(Key qukey)
-{
-    //NRF_LOG_DEBUG("Searching for superkey that generates qukey 0x%04X", qukey.getRaw());
-    
-    for (uint16_t i = 0; i < configured_superkeys; i++)
-    {
-        Key superkey = Key(ranges::DYNAMIC_SUPER_FIRST + i);
-        const Superkey::superkey_config_t * p_superkey_config = &p_keyrole_config->superkeys[i];
-        
-        Key action_0 = Superkey::getActionAsKey(p_superkey_config, 0);
-        Key action_1 = Superkey::getActionAsKey(p_superkey_config, 1);
-        Key action_2 = Superkey::getActionAsKey(p_superkey_config, 2);
-        Key action_3 = Superkey::getActionAsKey(p_superkey_config, 3);
-        Key action_4 = Superkey::getActionAsKey(p_superkey_config, 4);
-        
-        if (is_idle(action_0)) continue;
-        
-        // Only process simple superkeys (tap + hold actions)
-        if (!is_idle(action_1) && is_idle(action_2) && is_idle(action_3) && is_idle(action_4))
-        {
-            Key tap_action = action_0;
-            Key hold_action = action_1;
-            tap_action.setFlags(0);
-            hold_action.setFlags(0);
-            
-            uint16_t potential_qukey_code = 0;
-            if (is_only_modifier(hold_action) || has_layer_change(action_1))
-            {
-                potential_qukey_code = replace_superkey_with_qukey(&action_0, &action_1);
-            }
-            
-            if (potential_qukey_code == qukey.getRaw())
-            {
-                if (is_only_modifier(action_1) || has_layer_change(action_1))
-                {
-                    return qukey;  // Still a qukey
-                }
-                else
-                {
-                    //NRF_LOG_INFO("Reverting qukey 0x%04X to superkey 0x%04X", qukey.getRaw(), superkey.getRaw());
-                    return superkey;  // Revert to superkey
-                }
-            }
-        }
-    }
-    
-    return qukey;  // Not found, keep as qukey
-}
-
-void KeyRoleManager::transform_keymap_superkeys_to_qukeys()
-{
-    uint16_t total_keys = static_cast<uint16_t>(Runtime.device().numKeys()) * APP_LAYERS_CNT;
-    const EEPROMKeymap::keymap_config_t * p_keymap_config = EEPROMKeymap::getKeymapConfig();
-    uint16_t qk_to_sk = 0;
-    uint16_t sk_to_qk = 0;
-    
-    //NRF_LOG_INFO("Transforming keymap: %d total keys", total_keys);
-    
-    // Pass 1: Revert ALL qukeys to superkeys using PREVIOUS modified_keys[] mapping
-    //NRF_LOG_DEBUG("Pass 1: Reverting qukeys to superkeys using %d previous mappings", previous_modified_keys_count);
-    for (uint16_t i = 0; i < total_keys; i++)
-    {
-        Key stored_key = Key( p_keymap_config->keys[i].keyCode, p_keymap_config->keys[i].flags );
-        
-        if (is_qukey(stored_key))
-        {
-            // Search in PREVIOUS modified_keys[] for this qukey
-            for (uint8_t j = 0; j < Utils::MAX_SUPER_KEYS_ACTIVE; j++)
-            {
-                if (previous_modified_keys[j].qukey_id == stored_key.getRaw())
-                {
-                    // Found it! Revert to superkey
-                    Key superkey = Key(previous_modified_keys[j].sk_id);
-                    EEPROMKeymap::updateKey(i, superkey);
-                    qk_to_sk++;
-                    //NRF_LOG_DEBUG("Reverted qukey 0x%04X to superkey 0x%04X at pos %d", stored_key.getRaw(), superkey.getRaw(), i);
-                    break;
-                }
-            }
-        }
-    }
-    
-    // Pass 2: Transform superkeys to qukeys based on current configuration
-    //NRF_LOG_DEBUG("Pass 2: Transforming superkeys to qukeys");
-    for (uint16_t i = 0; i < total_keys; i++)
-    {
-        Key stored_key = Key( p_keymap_config->keys[i].keyCode, p_keymap_config->keys[i].flags );
-        
-        if (!IS_OUTSIDE_DYNAMIC_SUPER_RANGE(stored_key))
-        {
-            Key transformed_key = search_and_replace(stored_key);
-            if (transformed_key.getRaw() != stored_key.getRaw())
-            {
-                EEPROMKeymap::updateKey(i, transformed_key);
-                sk_to_qk++;
-            }
-        }
-    }
-    
-    // Commit changes to EEPROM
-    Runtime.storage().commit();
-    //NRF_LOG_INFO("Keymap transformation completed: %d QK->SK, %d SK->QK", qk_to_sk, sk_to_qk);
 }
 
 EventHandlerResult KeyRoleManager::onKeyswitchEvent(Key &mapped_key, KeyAddr key_addr, uint8_t keyState)
@@ -632,22 +551,9 @@ EventHandlerResult KeyRoleManager::onFocusEvent(const char *command)
 
                 pos++;
             }
-            
-            // Save current modified_keys before updating configuration
-            for (uint8_t i = 0; i < Utils::MAX_SUPER_KEYS_ACTIVE; i++)
-            {
-                previous_modified_keys[i] = modified_keys[i];
-            }
-            previous_modified_keys_count = modified_keys_count;
-            //NRF_LOG_DEBUG("Saved %d previous qukey mappings", previous_modified_keys_count);
-            
-            // Rebuild superkey handlers and qukey mappings based on new configuration
+
+            /* Rebuild the handlers and the dual-function slots. The keymap keeps the Superkey codes as written */
             setup_keys();
-            //NRF_LOG_DEBUG("Rebuilt mappings: found %d qukeys", modified_keys_count);
-            
-            // Transform the keymap
-            transform_keymap_superkeys_to_qukeys();
-            //NRF_LOGLOG_INFO("Superkeys configuration and keymap transformation completed");
         }
         result = EventHandlerResult::EVENT_CONSUMED;
     }
