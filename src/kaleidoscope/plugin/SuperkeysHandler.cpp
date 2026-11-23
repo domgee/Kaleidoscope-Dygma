@@ -40,6 +40,10 @@ namespace plugin
 {
 const SuperkeysHandler::superkey_config_t * SuperkeysHandler::p_superkey_config = nullptr;
 uint8_t SuperkeysHandler::configured_superkeys = 0;
+KeyAddr SuperkeysHandler::origin_addr;
+uint32_t SuperkeysHandler::origin_ms = 0;
+uint32_t SuperkeysHandler::origin_held_ms = 0;
+bool SuperkeysHandler::origin_valid = false;
 
 Superkey SuperkeysHandler_sk_array[Utils::MAX_SUPER_KEYS_ACTIVE];
 
@@ -251,6 +255,7 @@ EventHandlerResult SuperkeysHandler::handle_superkeys(Key &mapped_key, KeyAddr k
                     SuperkeysHandler_sk_array[pos].init_timer();
                     SuperkeysHandler_sk_array[pos].set_key_and_keyAddr(mapped_key, key_addr);
                     SuperkeysHandler_sk_array[pos].key_pressed();
+                    age_from_origin(SuperkeysHandler_sk_array[pos], key_addr);
 
                     Utils::TimelineEntry entry = {
                         mapped_key, key_addr, Utils::KeyType::SUPERKEY, static_cast<void *>(&SuperkeysHandler_sk_array[pos])};
@@ -271,6 +276,7 @@ EventHandlerResult SuperkeysHandler::handle_superkeys(Key &mapped_key, KeyAddr k
                         SuperkeysHandler_sk_array[pos].init_timer();
                         SuperkeysHandler_sk_array[pos].set_key_and_keyAddr(mapped_key, key_addr);
                         SuperkeysHandler_sk_array[pos].key_pressed();
+                        age_from_origin(SuperkeysHandler_sk_array[pos], key_addr);
 
                         Utils::TimelineEntry entry = {
                             mapped_key, key_addr, Utils::KeyType::SUPERKEY, static_cast<void *>(&SuperkeysHandler_sk_array[pos])};
@@ -290,6 +296,7 @@ EventHandlerResult SuperkeysHandler::handle_superkeys(Key &mapped_key, KeyAddr k
                             SuperkeysHandler_sk_array[pos].init_timer();
                             SuperkeysHandler_sk_array[pos].set_key_and_keyAddr(mapped_key, key_addr);
                             SuperkeysHandler_sk_array[pos].key_pressed();
+                            age_from_origin(SuperkeysHandler_sk_array[pos], key_addr);
 
                             Utils::TimelineEntry entry = {
                                 mapped_key, key_addr, Utils::KeyType::SUPERKEY, static_cast<void *>(&SuperkeysHandler_sk_array[pos])};
@@ -414,6 +421,29 @@ EventHandlerResult SuperkeysHandler::onKeyswitchEvent(Key &mapped_key, KeyAddr k
 bool SuperkeysHandler::hasPendingSuperkey()
 {
     return timeline.has_pending_superkey();
+}
+
+void SuperkeysHandler::setPressOrigin(KeyAddr addr, uint32_t press_ms, uint32_t held_ms)
+{
+    origin_addr = addr;
+    origin_ms = press_ms;
+    origin_held_ms = held_ms;
+    origin_valid = true;
+}
+
+void SuperkeysHandler::clearPressOrigin()
+{
+    origin_valid = false;
+}
+
+void SuperkeysHandler::age_from_origin(Superkey &sk, KeyAddr key_addr)
+{
+    if (!origin_valid || origin_addr != key_addr)
+    {
+        return;
+    }
+
+    sk.age_hold_timer(Runtime.millisAtCycleStart() - origin_ms, origin_held_ms);
 }
 
 EventHandlerResult SuperkeysHandler::beforeReportingState()

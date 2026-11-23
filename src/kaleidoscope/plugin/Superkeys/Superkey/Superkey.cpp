@@ -32,6 +32,8 @@ Superkey::Superkey()
     superKeyState.enabled = 0;
     superKeyState.is_qukey = 0;
     superKeyState.is_interruptable = 0;
+    superKeyState.hold_blocked = 0;
+    superKeyState.hold_aged = 0;
 }
 
 /************SUPERKEY CONFIGURATION*************/
@@ -61,6 +63,8 @@ void Superkey::disable()
     superKeyState.trigger_timer = 0;
     superKeyState.pressed = false;
     superKeyState.released = false;
+    superKeyState.hold_blocked = false;
+    superKeyState.hold_aged = false;
     timeline.remove(this->keyaddr_);
 }
 
@@ -132,6 +136,16 @@ void Superkey::key_pressed()
 
 void Superkey::key_released()
 {
+    /* Settle a hold the press origin made due, since a full Qukeys queue can flush this release before any hold check */
+    if (superKeyState.hold_aged && !superKeyState.hold_blocked && !superKeyState.holded && shared_config_ &&
+        kbdtimer_check( &superKeyState.hold_timer ))
+    {
+        hold();
+    }
+
+    superKeyState.hold_blocked = false;
+    superKeyState.hold_aged = false;
+
     // Capture whether this cycle was a hold before release() resets flags
     bool was_hold = superKeyState.holded;
     release();
@@ -167,11 +181,32 @@ void Superkey::key_released()
 
 void Superkey::key_is_pressed()
 {
-    if ( shared_config_ && kbdtimer_check( &superKeyState.hold_timer ) )
+    if ( shared_config_ && !superKeyState.hold_blocked && kbdtimer_check( &superKeyState.hold_timer ) )
     {
         hold();
     }
     update_timestamp();
+}
+
+/* Count the hold timer from an earlier physical press. A press released before the deadline stays a tap until its release, while
+ * Qukeys may still re-press it. Leave the trigger timer alone */
+void Superkey::age_hold_timer(uint32_t age_ms, uint32_t held_ms)
+{
+    if (!shared_config_)
+    {
+        return;
+    }
+
+    uint16_t hold_timeout_ms = shared_config_->hold_timeout_ms;
+
+    if (held_ms < hold_timeout_ms)
+    {
+        superKeyState.hold_blocked = true;
+        return;
+    }
+
+    superKeyState.hold_aged = true;
+    kbdtimer_set_ms( &superKeyState.hold_timer, age_ms >= hold_timeout_ms ? 0 : hold_timeout_ms - age_ms );
 }
 
 /************SUPERKEY ACTIONS*************/
@@ -179,6 +214,8 @@ void Superkey::key_is_pressed()
 void Superkey::tap()
 {
     superKeyState.released = false;
+    superKeyState.hold_blocked = false;
+    superKeyState.hold_aged = false;
     kbdtimer_set_ms( &superKeyState.hold_timer, shared_config_->hold_timeout_ms );
     update_timestamp();
     ++superKeyState.tap_count;

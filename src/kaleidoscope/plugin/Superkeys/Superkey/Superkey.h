@@ -57,6 +57,7 @@ public:
   void key_pressed();
   void key_released();
   void key_is_pressed();
+  void age_hold_timer(uint32_t age_ms, uint32_t held_ms);
   bool is_interruptible();
   Key get_phisical_key() const;
   KeyAddr get_keyAddr() const;
@@ -94,6 +95,10 @@ private:
     // Sk tap count and type (tap_count uses 4 bits, type uses 4 bits)
     uint8_t tap_count : 4;  // Max 15 taps (more than enough)
     Utils::TapType type : 4; // 4 bits for enum (max 16 values)
+
+    /* Set by age_hold_timer. Blocked keeps a press released before the hold deadline a tap, aged settles a due hold before the release */
+    uint8_t hold_blocked : 1;
+    uint8_t hold_aged : 1;
 
     // Timers
     kbdtimer_t hold_timer{0};

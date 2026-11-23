@@ -111,7 +111,23 @@ namespace kaleidoscope
              */
             static bool hasPendingSuperkey();
 
+            /**
+             * @brief Count the hold timer of a Superkey armed at addr from an earlier physical press.
+             *
+             * Qukeys sets this around the flush of a replayed press and clears it right after. held_ms is the physical hold length
+             * when the release of that press is already queued, else UINT32_MAX.
+             */
+            static void setPressOrigin(KeyAddr addr, uint32_t press_ms, uint32_t held_ms);
+            static void clearPressOrigin();
+
             private:
+
+            static KeyAddr origin_addr;
+            static uint32_t origin_ms;
+            static uint32_t origin_held_ms;
+            static bool origin_valid;
+
+            static void age_from_origin(Superkey &sk, KeyAddr key_addr);
             
             static const superkey_config_t * p_superkey_config;
             

@@ -72,6 +72,11 @@ class KeyAddrEventQueue {
     return timestamps_[index];
   }
 
+  void setTimestamp(uint8_t index, _Timestamp ts) {
+    // assert(index < length_);
+    timestamps_[index] = ts;
+  }
+
   bool isRelease(uint8_t index) const {
     // assert(index < length_);
     return bitRead(release_event_bits_, index);
