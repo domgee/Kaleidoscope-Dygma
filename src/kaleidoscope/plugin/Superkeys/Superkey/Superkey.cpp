@@ -276,9 +276,15 @@ bool Superkey::interrupt(Key &regular_key, const KeyAddr &keyaddr_)
         return false;
     }
 
-    /* Keep a hold the press origin made due, so a later press never turns it into a tap */
+    /* Keep a hold the press origin made due, so a later press never turns it into a tap. Send it before that press unless an undecided
+     * earlier Superkey must go first */
     if (hold_is_due())
     {
+        if (!timeline.has_previous_undecided_superkey(this->keyaddr_))
+        {
+            settle_due_hold();
+        }
+
         return false;
     }
 
