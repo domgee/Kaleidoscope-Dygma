@@ -202,11 +202,17 @@ void Superkey::age_hold_timer(uint32_t age_ms, uint32_t held_ms)
     kbdtimer_set_ms( &superKeyState.hold_timer, age_ms >= hold_timeout_ms ? 0 : hold_timeout_ms - age_ms );
 }
 
+/* Return true when the press origin made a hold due that has not fired yet */
+bool Superkey::hold_is_due()
+{
+    return superKeyState.hold_aged && !superKeyState.hold_blocked && !superKeyState.holded && shared_config_ &&
+           kbdtimer_check( &superKeyState.hold_timer );
+}
+
 /* Fire a hold that the press origin made due. Return true when it fired */
 bool Superkey::settle_due_hold()
 {
-    if (!superKeyState.hold_aged || superKeyState.hold_blocked || superKeyState.holded || !shared_config_ ||
-        !kbdtimer_check( &superKeyState.hold_timer ))
+    if (!hold_is_due())
     {
         return false;
     }
@@ -267,6 +273,12 @@ bool Superkey::interrupt(Key &regular_key, const KeyAddr &keyaddr_)
     if (ActionsDriver::isOnlyModifier(regular_key))
     {
         ActionsDriver::send_modifier(regular_key, keyaddr_);
+        return false;
+    }
+
+    /* Keep a hold the press origin made due, so a later press never turns it into a tap */
+    if (hold_is_due())
+    {
         return false;
     }
 

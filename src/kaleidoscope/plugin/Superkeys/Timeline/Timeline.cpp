@@ -245,4 +245,29 @@ bool Timeline::has_pending_superkey() const
     return false;
 }
 
+bool Timeline::has_previous_undecided_superkey(const KeyAddr& addr) const
+{
+    for (uint8_t i = 0; i < count; ++i)
+    {
+        if (entries[i].addr == addr)
+        {
+            return false;
+        }
+
+        if (entries[i].type != Utils::KeyType::SUPERKEY || entries[i].context == nullptr)
+        {
+            continue;
+        }
+
+        const Superkey* sk = static_cast<const Superkey*>(entries[i].context);
+
+        if (!sk->is_holded())
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 Timeline timeline; // Global instance of Timeline

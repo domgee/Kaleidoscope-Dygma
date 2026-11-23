@@ -461,10 +461,11 @@ void SuperkeysHandler::age_from_origin(Superkey &sk, KeyAddr key_addr)
     sk.age_hold_timer(Runtime.millisAtCycleStart() - origin_ms, origin_held_ms);
 }
 
-/* Fire a hold the press origin already made due right after arming, so no later press can interrupt it first. Keep the timeline order */
+/* Fire a hold the press origin already made due right after arming, so no later press can interrupt it first. Wait behind an undecided
+ * earlier Superkey to keep the timeline order */
 void SuperkeysHandler::settle_origin_hold(Superkey &sk, KeyAddr key_addr)
 {
-    if (!origin_valid || origin_addr != key_addr || timeline.has_previous_superkey_pending(key_addr))
+    if (!origin_valid || origin_addr != key_addr || timeline.has_previous_undecided_superkey(key_addr))
     {
         return;
     }

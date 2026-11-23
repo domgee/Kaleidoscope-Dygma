@@ -59,6 +59,7 @@ public:
   void key_is_pressed();
   void age_hold_timer(uint32_t age_ms, uint32_t held_ms);
   bool settle_due_hold();
+  bool hold_is_due();
   bool is_interruptible();
   Key get_phisical_key() const;
   KeyAddr get_keyAddr() const;

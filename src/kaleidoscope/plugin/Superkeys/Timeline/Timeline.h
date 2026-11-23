@@ -42,6 +42,9 @@ public:
     // before keyRoleManager and would otherwise hide keys from the timeline.
     bool has_pending_superkey() const;
 
+    /* Return true when a SUPERKEY entry before the entry at addr is still undecided, with the predicate of has_pending_superkey() */
+    bool has_previous_undecided_superkey(const KeyAddr& addr) const;
+
 private:
 
     Utils::TimelineEntry entries[MAX_ENTRIES];
