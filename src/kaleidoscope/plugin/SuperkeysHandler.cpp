@@ -261,6 +261,7 @@ EventHandlerResult SuperkeysHandler::handle_superkeys(Key &mapped_key, KeyAddr k
                         mapped_key, key_addr, Utils::KeyType::SUPERKEY, static_cast<void *>(&SuperkeysHandler_sk_array[pos])};
 
                     timeline.add(entry);
+                    settle_origin_hold(SuperkeysHandler_sk_array[pos], key_addr);
                     return EventHandlerResult::EVENT_CONSUMED;
                 }
                 else
@@ -282,6 +283,7 @@ EventHandlerResult SuperkeysHandler::handle_superkeys(Key &mapped_key, KeyAddr k
                             mapped_key, key_addr, Utils::KeyType::SUPERKEY, static_cast<void *>(&SuperkeysHandler_sk_array[pos])};
 
                         timeline.add(entry);
+                        settle_origin_hold(SuperkeysHandler_sk_array[pos], key_addr);
                         return EventHandlerResult::EVENT_CONSUMED;
                     }
                     else
@@ -302,6 +304,7 @@ EventHandlerResult SuperkeysHandler::handle_superkeys(Key &mapped_key, KeyAddr k
                                 mapped_key, key_addr, Utils::KeyType::SUPERKEY, static_cast<void *>(&SuperkeysHandler_sk_array[pos])};
 
                             timeline.add(entry);
+                            settle_origin_hold(SuperkeysHandler_sk_array[pos], key_addr);
                             return EventHandlerResult::EVENT_CONSUMED;
                         }
                         else
@@ -324,6 +327,18 @@ EventHandlerResult SuperkeysHandler::handle_superkeys(Key &mapped_key, KeyAddr k
                 if (!dual_function_owner(SuperkeysHandler_sk_array[pos], key_addr))
                 {
                     return EventHandlerResult::EVENT_CONSUMED;
+                }
+
+                /* Settle a hold the press origin made due, since a full Qukeys queue can flush this release before any hold check. Then
+                 * release what the hold left in the live keymap, as the release of a held Superkey does */
+                if (SuperkeysHandler_sk_array[pos].settle_due_hold())
+                {
+                    mapped_key = Layer.lookup(key_addr);
+
+                    if (IS_OUTSIDE_DYNAMIC_SUPER_RANGE(mapped_key.getRaw()))
+                    {
+                        return handle_regular_keys(mapped_key, key_addr, keyState);
+                    }
                 }
 
                 SuperkeysHandler_sk_array[pos].key_released();
@@ -444,6 +459,17 @@ void SuperkeysHandler::age_from_origin(Superkey &sk, KeyAddr key_addr)
     }
 
     sk.age_hold_timer(Runtime.millisAtCycleStart() - origin_ms, origin_held_ms);
+}
+
+/* Fire a hold the press origin already made due right after arming, so no later press can interrupt it first. Keep the timeline order */
+void SuperkeysHandler::settle_origin_hold(Superkey &sk, KeyAddr key_addr)
+{
+    if (!origin_valid || origin_addr != key_addr || timeline.has_previous_superkey_pending(key_addr))
+    {
+        return;
+    }
+
+    sk.settle_due_hold();
 }
 
 EventHandlerResult SuperkeysHandler::beforeReportingState()

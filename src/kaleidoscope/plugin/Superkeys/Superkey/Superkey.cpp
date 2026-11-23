@@ -136,13 +136,6 @@ void Superkey::key_pressed()
 
 void Superkey::key_released()
 {
-    /* Settle a hold the press origin made due, since a full Qukeys queue can flush this release before any hold check */
-    if (superKeyState.hold_aged && !superKeyState.hold_blocked && !superKeyState.holded && shared_config_ &&
-        kbdtimer_check( &superKeyState.hold_timer ))
-    {
-        hold();
-    }
-
     superKeyState.hold_blocked = false;
     superKeyState.hold_aged = false;
 
@@ -207,6 +200,20 @@ void Superkey::age_hold_timer(uint32_t age_ms, uint32_t held_ms)
 
     superKeyState.hold_aged = true;
     kbdtimer_set_ms( &superKeyState.hold_timer, age_ms >= hold_timeout_ms ? 0 : hold_timeout_ms - age_ms );
+}
+
+/* Fire a hold that the press origin made due. Return true when it fired */
+bool Superkey::settle_due_hold()
+{
+    if (!superKeyState.hold_aged || superKeyState.hold_blocked || superKeyState.holded || !shared_config_ ||
+        !kbdtimer_check( &superKeyState.hold_timer ))
+    {
+        return false;
+    }
+
+    superKeyState.hold_aged = false;
+    hold();
+    return true;
 }
 
 /************SUPERKEY ACTIONS*************/

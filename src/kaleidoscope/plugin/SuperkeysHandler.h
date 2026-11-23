@@ -128,6 +128,7 @@ namespace kaleidoscope
             static bool origin_valid;
 
             static void age_from_origin(Superkey &sk, KeyAddr key_addr);
+            static void settle_origin_hold(Superkey &sk, KeyAddr key_addr);
             
             static const superkey_config_t * p_superkey_config;
             
